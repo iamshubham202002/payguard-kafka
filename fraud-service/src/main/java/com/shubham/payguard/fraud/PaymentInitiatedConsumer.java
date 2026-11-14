@@ -14,16 +14,20 @@ import org.springframework.stereotype.Component;
 public class PaymentInitiatedConsumer {
 
     private final FraudDecisionService decisionService;
+    private final DecisionSink decisionSink;
     private final KafkaTemplate<String, Object> kafkaTemplate;
 
-    public PaymentInitiatedConsumer(FraudDecisionService decisionService, KafkaTemplate<String, Object> kafkaTemplate) {
+    public PaymentInitiatedConsumer(FraudDecisionService decisionService, DecisionSink decisionSink,
+                                    KafkaTemplate<String, Object> kafkaTemplate) {
         this.decisionService = decisionService;
+        this.decisionSink = decisionSink;
         this.kafkaTemplate = kafkaTemplate;
     }
 
     @KafkaListener(topics = Topics.PAYMENT_INITIATED, groupId = "fraud-service")
     public void onPayment(PaymentInitiated payment) {
         FraudDecision decision = decisionService.decide(payment);
+        decisionSink.publish(payment, decision);
         try {
             // Wait for the broker ack: if publishing fails the exception reaches the error handler,
             // the offset is not committed, and the record is retried, then dead-lettered.

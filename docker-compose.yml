@@ -40,6 +40,21 @@ services:
       timeout: 5s
       retries: 10
 
+  localstack:
+    image: localstack/localstack:3.8.1
+    container_name: payguard-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: s3,sqs
+    volumes:
+      - ./docker/localstack-init.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal s3api head-bucket --bucket payguard-decision-archive && awslocal sqs get-queue-url --queue-name payment-review-queue"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   payment-service:
     build:
       context: .
@@ -68,8 +83,15 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
     environment:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/fraud
+      AWS_ENABLED: "true"
+      AWS_ENDPOINT: http://localstack:4566
+      AWS_REGION: eu-west-2
+      AWS_ACCESS_KEY_ID: test            # dummy credentials, LocalStack only
+      AWS_SECRET_ACCESS_KEY: test
     ports:
       - "8081:8081"

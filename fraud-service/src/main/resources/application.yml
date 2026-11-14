@@ -48,6 +48,15 @@ fraud:
       max-payments: 5
       window: PT1M
 
+aws:
+  enabled: false                       # set true (AWS_ENABLED=true) to archive to S3 and queue reviews on SQS
+  region: eu-west-2
+  endpoint: ""                         # e.g. http://localhost:4566 for LocalStack; empty = real AWS
+  s3:
+    bucket: payguard-decision-archive
+  sqs:
+    queue-name: payment-review-queue
+
 management:
   endpoints:
     web:

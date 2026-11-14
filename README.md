@@ -4,7 +4,7 @@ Two Spring Boot microservices that talk over **Apache Kafka**. The payment API a
 the fraud service scores it with a pluggable rule engine, and the verdict flows back to update the
 payment — all asynchronously.
 
-**Stack:** Java 21 · Spring Boot 3.3 · Spring Kafka · PostgreSQL 16 · Flyway · Docker Compose · JUnit 5 / Mockito · GitHub Actions
+**Stack:** Java 21 · Spring Boot 3.3 · Spring Kafka · PostgreSQL 16 · Flyway · AWS (S3, SQS via AWS SDK v2) · Docker Compose / LocalStack · JUnit 5 / Mockito · GitHub Actions
 
 ## Architecture
 
@@ -19,6 +19,8 @@ flowchart LR
     K --> P
     P -- "APPROVED / PENDING_REVIEW / REJECTED" --> PDB
     F -. "poison or repeatedly failing" .-> DLT{{payments.initiated.DLT}}
+    F -- "every decision (JSON)" --> S3[(AWS S3 archive)]
+    F -- "REVIEW / REJECT" --> SQS[[AWS SQS review queue]]
 ```
 
 | Topic | Key | Producer | Consumer |
@@ -40,6 +42,29 @@ and maps the total to a decision (`>= 40` REVIEW, `>= 70` REJECT; both configura
 | `VELOCITY` | more than 5 payments from one account within 1 minute | 40 |
 
 Adding a rule = one class implementing `FraudRule`.
+
+## AWS integration
+
+The fraud service can write to AWS (AWS SDK for Java v2), switched on with `aws.enabled=true`:
+
+| Resource | Purpose |
+|---|---|
+| S3 bucket `payguard-decision-archive` | Audit trail: every decision stored as `decisions/<date>/<paymentId>.json` |
+| SQS queue `payment-review-queue` | Work queue of REVIEW and REJECT payments for analysts, with a `decision` message attribute |
+
+- Credentials use the SDK's default provider chain (environment, profile or IAM role) — nothing is hard-coded.
+- `docker compose` runs **LocalStack** and creates the bucket and queue, so it works without an AWS account. The dummy `test` credentials in `docker-compose.yml` are for LocalStack only.
+- To use real AWS, set `AWS_ENABLED=true`, leave `AWS_ENDPOINT` empty, create the bucket and queue, and give the service an IAM role allowed `s3:PutObject` and `sqs:SendMessage` / `sqs:GetQueueUrl`.
+- Both calls tolerate Kafka's at-least-once delivery: the S3 key comes from the payment id (a retry overwrites the same object), and SQS standard queues may deliver duplicates, so review-queue consumers must be idempotent.
+- With `aws.enabled=false` (the default) a no-op sink is used and only Kafka and PostgreSQL are required.
+
+Check it after running the demo requests below:
+
+```bash
+docker exec payguard-localstack awslocal s3 ls s3://payguard-decision-archive --recursive
+docker exec payguard-localstack awslocal sqs receive-message \
+  --queue-url http://sqs.eu-west-2.localhost.localstack.cloud:4566/000000000000/payment-review-queue
+```
 
 ## Run it
 
@@ -80,8 +105,9 @@ docker exec -it payguard-kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 --topic payments.decisions --from-beginning
 ```
 
-Run only the infrastructure and start the services from your IDE: `docker compose up kafka postgres`
-(services default to `localhost:29092` and `localhost:5432`).
+Run only the infrastructure and start the services from your IDE: `docker compose up kafka postgres localstack`
+(services default to `localhost:29092` and `localhost:5432`; for AWS locally set `AWS_ENABLED=true`,
+`AWS_ENDPOINT=http://localhost:4566`, `AWS_ACCESS_KEY_ID=test`, `AWS_SECRET_ACCESS_KEY=test`).
 
 ## Tests
 
@@ -90,7 +116,7 @@ mvn verify
 ```
 
 Unit tests cover each fraud rule (including the sliding velocity window with a controllable clock),
-score-to-decision mapping, idempotent decision handling, the payment service (idempotency, status
+score-to-decision mapping, idempotent decision handling, the S3/SQS sink (mocked AWS clients), the payment service (idempotency, status
 transitions) and the REST layer (`@WebMvcTest`: 201 / 200 / 400 / 404).
 CI runs the same command on every push (`.github/workflows/ci.yml`).
 
@@ -110,5 +136,6 @@ CI runs the same command on every push (`.github/workflows/ci.yml`).
 - **Velocity state** is in memory and per instance; use Kafka Streams state stores or Redis for a durable, scalable version.
 - **No FX conversion:** amount thresholds are applied in the payment's own currency.
 - **Message format** uses ISO 20022-style field names (end-to-end id, debtor, creditor) but is not a real `pacs.008` message.
-- **Integration tests** with Testcontainers (real Kafka + Postgres) are not included yet.
+- **Integration tests** with Testcontainers (real Kafka + Postgres + LocalStack) are not included yet; the AWS code is unit-tested with mocked clients and has not been exercised against a real AWS account.
+- The database is plain PostgreSQL in Docker; pointing `SPRING_DATASOURCE_URL` at Amazon RDS needs no code change but is not set up here.
 - No authentication on the REST API; this is a demo of the event flow, not a hardened service.
