@@ -3,7 +3,7 @@ services:
     image: apache/kafka:3.8.0
     container_name: payguard-kafka
     ports:
-      - "29092:29092"   # host access for local development
+      - "29092:29092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -31,7 +31,7 @@ services:
       POSTGRES_PASSWORD: payguard
       POSTGRES_DB: payments
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
     healthcheck:
@@ -41,19 +41,19 @@ services:
       retries: 10
 
   localstack:
-    image: localstack/localstack:3.8.1
+    image: localstack/localstack:3.8.0
     container_name: payguard-localstack
     ports:
       - "4566:4566"
     environment:
-      SERVICES: s3,sqs
-    volumes:
-      - ./docker/localstack-init.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
+      - SERVICES=sqs,s3
+      - AWS_DEFAULT_REGION=eu-west-2
     healthcheck:
-      test: ["CMD-SHELL", "awslocal s3api head-bucket --bucket payguard-decision-archive && awslocal sqs get-queue-url --queue-name payment-review-queue"]
-      interval: 5s
+      test: [ "CMD", "curl", "-f", "http://127.0.0.1:4566/_localstack/health" ]
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 5
+      start_period: 40s
 
   payment-service:
     build:
@@ -70,7 +70,7 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payments
     ports:
-      - "8080:8080"
+      - "8081:8080"
 
   fraud-service:
     build:
@@ -91,7 +91,7 @@ services:
       AWS_ENABLED: "true"
       AWS_ENDPOINT: http://localstack:4566
       AWS_REGION: eu-west-2
-      AWS_ACCESS_KEY_ID: test            # dummy credentials, LocalStack only
+      AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
     ports:
-      - "8081:8081"
+      - "8082:8081"
